@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Barlow Condensed', sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@keyframes d20-tumble {
+  0% {
+    transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(1);
+  }
+  25% {
+    transform: rotateX(180deg) rotateY(90deg) rotateZ(45deg) scale(1.12);
+  }
+  50% {
+    transform: rotateX(360deg) rotateY(270deg) rotateZ(135deg) scale(0.95);
+  }
+  75% {
+    transform: rotateX(540deg) rotateY(180deg) rotateZ(225deg) scale(1.08);
+  }
+  100% {
+    transform: rotateX(720deg) rotateY(360deg) rotateZ(360deg) scale(1);
+  }
+}
+
+.animate-d20-roll {
+  animation: d20-tumble 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+}

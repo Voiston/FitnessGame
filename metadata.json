@@ -1,0 +1,6 @@
+{
+  "name": "D20 Fitness Battle",
+  "description": "Jeu de plateau sportif et tactique en temps réel avec grille de 20 cases, lancer de D20, deck de 10 cartes d'action, mode Pass & Play et mode Salle Multi-Écrans Coach/Athlètes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
