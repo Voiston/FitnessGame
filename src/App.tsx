@@ -27,6 +27,9 @@ import {
   X,
   Mic,
   MicOff,
+  Share2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import {
   WorkoutConfig,
@@ -58,7 +61,7 @@ import { TimerOverlay } from './components/TimerOverlay';
 import { CoachScreenView } from './components/CoachScreenView';
 import { VictoryScreen } from './components/VictoryScreen';
 import { soundEngine } from './utils/sound';
-import { P2PRoomManager } from './utils/multiplayerSync';
+import { P2PRoomManager, buildShareableRoomUrl } from './utils/multiplayerSync';
 
 type NavTab = 'ARENA' | 'MULTI_ROOM' | 'CARDS_CATALOG' | 'RULES';
 
@@ -76,9 +79,13 @@ export default function App() {
   const [voiceCoachEnabled, setVoiceCoachEnabled] = useState(true);
 
   // Setup Form State
-  const [setupMode, setSetupMode] = useState<'PASS_AND_PLAY' | 'COACH_TV' | 'JOIN_ATHLETE'>(
-    'PASS_AND_PLAY'
-  );
+  const [setupMode, setSetupMode] = useState<'PASS_AND_PLAY' | 'COACH_TV' | 'JOIN_ATHLETE'>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('room')) return 'JOIN_ATHLETE';
+    }
+    return 'PASS_AND_PLAY';
+  });
   const [workoutConfig, setWorkoutConfig] = useState<WorkoutConfig>(WORKOUT_PRESETS[0].config);
   const [showCustomExercises, setShowCustomExercises] = useState(false);
   const [setupPlayers, setSetupPlayers] = useState<SetupPlayerDraft[]>([
@@ -90,12 +97,20 @@ export default function App() {
   // On-demand Drawers during active workout
   const [showFullGridModal, setShowFullGridModal] = useState(false);
   const [showCardsDrawer, setShowCardsDrawer] = useState(true);
+  const [copiedInviteLink, setCopiedInviteLink] = useState(false);
 
   // Multi-Screen Host / Join Form State
   const [hostAthleteName, setHostAthleteName] = useState('Lucas');
+  const [hostPlaysToo, setHostPlaysToo] = useState(true);
   const [hostScalingLevel, setHostScalingLevel] = useState<ScalingLevel>('RX');
   const [hostTeamId, setHostTeamId] = useState<TeamId>('SOLO');
-  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joinCodeInput, setJoinCodeInput] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('room') || '').toUpperCase().trim();
+    }
+    return '';
+  });
   const [joinAthleteName, setJoinAthleteName] = useState('');
   const [joinScalingLevel, setJoinScalingLevel] = useState<ScalingLevel>('RX');
   const [joinTeamId, setJoinTeamId] = useState<TeamId>('SOLO');
@@ -104,6 +119,13 @@ export default function App() {
   // Active Game / Room State
   const [room, setRoom] = useState<RoomState | null>(() => {
     try {
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        // Si le joueur ouvre un lien d'invitation ?room=XXXX, afficher directement l'écran pour rejoindre
+        if (params.get('room')) {
+          return null;
+        }
+      }
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as RoomState;
@@ -178,9 +200,10 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const codeParam = params.get('room');
     if (codeParam) {
-      setJoinCodeInput(codeParam.toUpperCase());
+      setJoinCodeInput(codeParam.toUpperCase().trim());
       setSetupMode('JOIN_ATHLETE');
-      setActiveNav('MULTI_ROOM');
+      setRoom(null);
+      setActiveNav('ARENA');
     }
     return () => {
       p2pManagerRef.current?.destroy();
@@ -336,10 +359,36 @@ export default function App() {
     );
   };
 
+  const handleCopyInviteLink = (roomCode: string) => {
+    const shareUrl = buildShareableRoomUrl(roomCode);
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(shareUrl).catch(() => {});
+      setCopiedInviteLink(true);
+      setTimeout(() => setCopiedInviteLink(false), 2500);
+    }
+  };
+
+  const handleShareInviteNative = async (roomCode: string) => {
+    const shareUrl = buildShareableRoomUrl(roomCode);
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: `D20 Fitness Battle — Salon ${roomCode}`,
+          text: `Rejoins notre séance D20 Fitness Battle (Code : ${roomCode}) :`,
+          url: shareUrl,
+        });
+        return;
+      } catch {
+        // Fallback to clipboard copy
+      }
+    }
+    handleCopyInviteLink(roomCode);
+  };
+
   const handleJoinRoomAsAthlete = (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinCodeInput.trim()) {
-      setWsError('Veuillez saisir le code de salle à 4 caractères.');
+      setWsError('Veuillez saisir le code du salon à 4 caractères.');
       return;
     }
     setWsError(null);
@@ -1406,10 +1455,10 @@ export default function App() {
           <div className="max-w-3xl mx-auto space-y-6">
             <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-xs">
               <h1 className="font-display font-extrabold text-3xl uppercase text-slate-900">
-                Mode Salle Multi-Téléphones & TV Temps Réel
+                Salon Multi-Téléphones en Direct
               </h1>
               <p className="text-sm text-slate-600 mt-1">
-                Synchronisez plusieurs téléphones et/ou l’écran TV du Coach via un code de salle à 4 lettres.
+                Ouvrez un salon en 1 clic pour obtenir un code à 4 lettres et inviter vos clients par lien.
               </p>
 
               {wsError && (
@@ -1420,81 +1469,90 @@ export default function App() {
 
               {isConnectingP2P && (
                 <div className="mt-4 p-3.5 rounded-xl bg-sky-50 border border-sky-200 text-xs font-semibold text-sky-900">
-                  Connexion directe Peer-to-Peer en cours...
+                  Connexion en direct au salon en cours...
                 </div>
               )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                {/* Create Room */}
+                {/* Create Room (Simplified) */}
                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50 flex flex-col justify-between space-y-4">
                   <div className="space-y-3">
                     <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center">
                       <Tv className="w-5 h-5" />
                     </div>
                     <h3 className="font-display font-bold text-2xl uppercase text-slate-900">
-                      Créer une Salle Temps Réel
+                      1. Héberger un Salon (Hôte)
                     </h3>
-                    <div>
-                      <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
-                        Votre Prénom (Hôte mobile)
-                      </label>
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
                       <input
-                        type="text"
-                        value={hostAthleteName}
-                        onChange={(e) => setHostAthleteName(e.target.value)}
-                        placeholder="Ex: Lucas"
-                        className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm text-slate-900"
+                        type="checkbox"
+                        checked={hostPlaysToo}
+                        onChange={(e) => setHostPlaysToo(e.target.checked)}
+                        className="rounded border-slate-300 text-red-600 focus:ring-red-600"
                       />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
-                          Niveau Scaling
-                        </label>
-                        <select
-                          value={hostScalingLevel}
-                          onChange={(e) => setHostScalingLevel(e.target.value as ScalingLevel)}
-                          className="w-full h-10 px-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold"
-                        >
-                          <option value="SCALED">×0.5 Débutant</option>
-                          <option value="RX">×1.0 RX</option>
-                          <option value="ELITE">×1.5 Élite</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
-                          Équipe / Grille
-                        </label>
-                        <select
-                          value={hostTeamId}
-                          onChange={(e) => setHostTeamId(e.target.value as TeamId)}
-                          className="w-full h-10 px-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold"
-                        >
-                          <option value="SOLO">Grille Solo</option>
-                          <option value="ALPHA">Équipe Alpha (Partagée)</option>
-                          <option value="BRAVO">Équipe Bravo (Partagée)</option>
-                        </select>
-                      </div>
-                    </div>
+                      <span>Je participe aussi comme joueur sur ce téléphone</span>
+                    </label>
+
+                    {hostPlaysToo && (
+                      <>
+                        <div>
+                          <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                            Votre Prénom
+                          </label>
+                          <input
+                            type="text"
+                            value={hostAthleteName}
+                            onChange={(e) => setHostAthleteName(e.target.value)}
+                            placeholder="Ex: Lucas"
+                            className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm text-slate-900"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                              Niveau Scaling
+                            </label>
+                            <select
+                              value={hostScalingLevel}
+                              onChange={(e) => setHostScalingLevel(e.target.value as ScalingLevel)}
+                              className="w-full h-10 px-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                            >
+                              <option value="SCALED">×0.5 Débutant</option>
+                              <option value="RX">×1.0 RX</option>
+                              <option value="ELITE">×1.5 Élite</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                              Équipe / Grille
+                            </label>
+                            <select
+                              value={hostTeamId}
+                              onChange={(e) => setHostTeamId(e.target.value as TeamId)}
+                              className="w-full h-10 px-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                            >
+                              <option value="SOLO">Grille Solo</option>
+                              <option value="ALPHA">Équipe Alpha</option>
+                              <option value="BRAVO">Équipe Bravo</option>
+                            </select>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <button
-                      type="button"
-                      onClick={() => handleCreateCoachRoom(hostAthleteName.trim() || 'Athlète 1')}
-                      className="w-full min-h-[48px] rounded-xl bg-red-600 hover:bg-red-700 text-white font-display font-bold text-lg uppercase tracking-wide flex items-center justify-center gap-2"
-                    >
-                      <Smartphone className="w-4 h-4" />
-                      Créer & Jouer sur ce Téléphone
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleCreateCoachRoom()}
-                      className="w-full min-h-[42px] rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-display font-bold text-sm uppercase tracking-wide flex items-center justify-center gap-2"
-                    >
-                      <Tv className="w-4 h-4" />
-                      Ouvrir uniquement Écran Coach TV
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    disabled={isConnectingP2P}
+                    onClick={() =>
+                      handleCreateCoachRoom(
+                        hostPlaysToo ? hostAthleteName.trim() || 'Hôte' : undefined
+                      )
+                    }
+                    className="w-full min-h-[52px] rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-display font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-2 shadow-xs"
+                  >
+                    <Play className="w-5 h-5" />
+                    Ouvrir le Salon & Obtenir le Code
+                  </button>
                 </div>
 
                 {/* Join Room */}
@@ -1507,11 +1565,11 @@ export default function App() {
                       <Smartphone className="w-5 h-5" />
                     </div>
                     <h3 className="font-display font-bold text-2xl uppercase text-slate-900">
-                      Rejoindre (Autre Téléphone)
+                      2. Rejoindre un Salon (Client)
                     </h3>
                     <div>
                       <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
-                        Code de la Salle (4 caractères)
+                        Code du Salon (4 caractères)
                       </label>
                       <input
                         type="text"
@@ -1559,8 +1617,8 @@ export default function App() {
                           className="w-full h-10 px-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold"
                         >
                           <option value="SOLO">Grille Solo</option>
-                          <option value="ALPHA">Équipe Alpha (Partagée)</option>
-                          <option value="BRAVO">Équipe Bravo (Partagée)</option>
+                          <option value="ALPHA">Équipe Alpha</option>
+                          <option value="BRAVO">Équipe Bravo</option>
                         </select>
                       </div>
                     </div>
@@ -1568,10 +1626,11 @@ export default function App() {
 
                   <button
                     type="submit"
-                    className="w-full min-h-[48px] rounded-xl bg-red-600 hover:bg-red-700 text-white font-display font-bold text-lg uppercase tracking-wide flex items-center justify-center gap-2"
+                    disabled={isConnectingP2P}
+                    className="w-full min-h-[52px] rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-display font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-2"
                   >
-                    <ArrowRight className="w-4 h-4" />
-                    Rejoindre la Bataille
+                    <ArrowRight className="w-5 h-5" />
+                    Rejoindre la Partie
                   </button>
                 </form>
               </div>
@@ -1590,363 +1649,546 @@ export default function App() {
                     Nouvelle Séance D20
                   </h1>
                   <p className="text-sm text-slate-600 mt-1">
-                    Choisissez un programme, ajustez le niveau de chaque joueur (×0.5 / RX / ×1.5) ou jouez en équipe.
+                    Choisissez comment vous souhaitez jouer aujourd’hui :
                   </p>
                 </div>
 
-                {/* 1. Quick Preset Selection */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-bold uppercase text-slate-700">
-                      1. Programme d’Exercices
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowCustomExercises((v) => !v)}
-                      className="text-xs font-semibold text-slate-600 hover:text-slate-900 flex items-center gap-1"
-                    >
-                      <SlidersHorizontal className="w-3.5 h-3.5" />
-                      <span>{showCustomExercises ? 'Masquer options' : 'Personnaliser'}</span>
-                    </button>
-                  </div>
+                {/* Top Mode Selector: 3 Ultra-Clear Choices */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWsError(null);
+                      setSetupMode('PASS_AND_PLAY');
+                    }}
+                    className={`p-3.5 rounded-2xl border text-left transition-all ${
+                      setupMode === 'PASS_AND_PLAY'
+                        ? 'border-slate-900 bg-slate-900 text-white shadow-xs'
+                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-900'
+                    }`}
+                  >
+                    <div className="font-display font-bold text-lg uppercase flex items-center gap-1.5">
+                      <Users className="w-4 h-4 shrink-0" />
+                      <span>1 Seul Écran</span>
+                    </div>
+                    <div className="text-xs opacity-80 mt-0.5">Pass & Play sur cet appareil</div>
+                  </button>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    {WORKOUT_PRESETS.map((preset) => (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        onClick={() =>
-                          setWorkoutConfig({
-                            ...preset.config,
-                            teamMode: workoutConfig.teamMode,
-                          })
-                        }
-                        className={`p-3.5 rounded-2xl border text-left transition-all ${
-                          workoutConfig.greenExercise === preset.config.greenExercise &&
-                          workoutConfig.yellowExercise === preset.config.yellowExercise
-                            ? 'border-slate-900 bg-slate-900 text-white'
-                            : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-900'
-                        }`}
-                      >
-                        <div className="font-display font-bold text-lg uppercase">
-                          {preset.label}
-                        </div>
-                        <div className="text-xs opacity-80 truncate mt-0.5">{preset.subtitle}</div>
-                      </button>
-                    ))}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWsError(null);
+                      setSetupMode('COACH_TV');
+                    }}
+                    className={`p-3.5 rounded-2xl border text-left transition-all ${
+                      setupMode === 'COACH_TV'
+                        ? 'border-red-600 bg-red-600 text-white shadow-xs'
+                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-900'
+                    }`}
+                  >
+                    <div className="font-display font-bold text-lg uppercase flex items-center gap-1.5">
+                      <Tv className="w-4 h-4 shrink-0" />
+                      <span>Héberger un Salon</span>
+                    </div>
+                    <div className="text-xs opacity-80 mt-0.5">Inviter plusieurs téléphones</div>
+                  </button>
 
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                    <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
-                      <div className="text-[11px] font-bold text-emerald-800">Cases 1–6</div>
-                      <div className="font-display font-bold text-base uppercase text-slate-900 truncate">
-                        {workoutConfig.greenExercise}
-                      </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWsError(null);
+                      setSetupMode('JOIN_ATHLETE');
+                    }}
+                    className={`p-3.5 rounded-2xl border text-left transition-all ${
+                      setupMode === 'JOIN_ATHLETE'
+                        ? 'border-slate-900 bg-slate-900 text-white shadow-xs'
+                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-900'
+                    }`}
+                  >
+                    <div className="font-display font-bold text-lg uppercase flex items-center gap-1.5">
+                      <Smartphone className="w-4 h-4 shrink-0" />
+                      <span>Rejoindre Salon</span>
                     </div>
-                    <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
-                      <div className="text-[11px] font-bold text-amber-800">Cases 7–13</div>
-                      <div className="font-display font-bold text-base uppercase text-slate-900 truncate">
-                        {workoutConfig.yellowExercise}
-                      </div>
-                    </div>
-                    <div className="p-2.5 rounded-xl bg-red-50 border border-red-200">
-                      <div className="text-[11px] font-bold text-red-800">Cases 14–20</div>
-                      <div className="font-display font-bold text-base uppercase text-slate-900 truncate">
-                        {workoutConfig.redExercise}
-                      </div>
-                    </div>
-                  </div>
-
-                  {showCustomExercises && (
-                    <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                          <label className="block text-xs font-bold text-emerald-800 mb-1">
-                            Vert (Cases 1 à 6)
-                          </label>
-                          <input
-                            type="text"
-                            value={workoutConfig.greenExercise}
-                            onChange={(e) =>
-                              setWorkoutConfig({ ...workoutConfig, greenExercise: e.target.value })
-                            }
-                            className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-amber-800 mb-1">
-                            Jaune (Cases 7 à 13)
-                          </label>
-                          <input
-                            type="text"
-                            value={workoutConfig.yellowExercise}
-                            onChange={(e) =>
-                              setWorkoutConfig({ ...workoutConfig, yellowExercise: e.target.value })
-                            }
-                            className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-red-800 mb-1">
-                            Rouge (Cases 14 à 20)
-                          </label>
-                          <input
-                            type="text"
-                            value={workoutConfig.redExercise}
-                            onChange={(e) =>
-                              setWorkoutConfig({ ...workoutConfig, redExercise: e.target.value })
-                            }
-                            className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                    <div className="text-xs opacity-80 mt-0.5">J’ai un code à 4 lettres</div>
+                  </button>
                 </div>
 
-                {/* 2. Format de Grille : Solo vs Relais Coop vs Duel d'Équipes */}
-                <div className="space-y-2.5 pt-2 border-t border-slate-200">
-                  <label className="block text-xs font-bold uppercase text-slate-700">
-                    2. Format de Grille (Solo ou Équipes)
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleTeamModeChange('INDIVIDUAL')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        workoutConfig.teamMode === 'INDIVIDUAL'
-                          ? 'border-slate-900 bg-slate-900 text-white'
-                          : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="font-display font-bold text-base uppercase">
-                        Chacun sa Grille
-                      </div>
-                      <div className="text-[11px] opacity-80">Compétition individuelle</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleTeamModeChange('COOP_RELAY')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        workoutConfig.teamMode === 'COOP_RELAY'
-                          ? 'border-slate-900 bg-slate-900 text-white'
-                          : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="font-display font-bold text-base uppercase">
-                        Relais Coopératif
-                      </div>
-                      <div className="text-[11px] opacity-80">1 grille de 20 cases partagée</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleTeamModeChange('TEAMS_VERSUS')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        workoutConfig.teamMode === 'TEAMS_VERSUS'
-                          ? 'border-slate-900 bg-slate-900 text-white'
-                          : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="font-display font-bold text-base uppercase">
-                        Duel d’Équipes (2v2)
-                      </div>
-                      <div className="text-[11px] opacity-80">Équipe Alpha vs Équipe Bravo</div>
-                    </button>
+                {wsError && (
+                  <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-800">
+                    {wsError}
                   </div>
-                </div>
+                )}
 
-                {/* 3. Support : 1 Écran vs Multi-Téléphones */}
-                <div className="space-y-4 pt-2 border-t border-slate-200">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold uppercase text-slate-700">
-                      3. Participants & Niveau (Scaling)
-                    </label>
-                    <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
-                      <button
-                        type="button"
-                        onClick={() => setSetupMode('PASS_AND_PLAY')}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold ${
-                          setupMode === 'PASS_AND_PLAY'
-                            ? 'bg-white text-slate-900 shadow-2xs'
-                            : 'text-slate-600'
-                        }`}
-                      >
-                        1 Écran
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSetupMode('COACH_TV')}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold ${
-                          setupMode === 'COACH_TV'
-                            ? 'bg-white text-slate-900 shadow-2xs'
-                            : 'text-slate-600'
-                        }`}
-                      >
-                        Multi-Téléphones / TV
-                      </button>
+                {isConnectingP2P && (
+                  <div className="p-3.5 rounded-xl bg-sky-50 border border-sky-200 text-xs font-semibold text-sky-900">
+                    Connexion en direct au salon en cours...
+                  </div>
+                )}
+
+                {setupMode === 'JOIN_ATHLETE' ? (
+                  /* DIRECT CLIENT JOIN VIEW */
+                  <form
+                    onSubmit={handleJoinRoomAsAthlete}
+                    className="p-5 rounded-2xl border-2 border-slate-900 bg-slate-50 space-y-4"
+                  >
+                    <div>
+                      <h2 className="font-display font-extrabold text-2xl uppercase text-slate-900">
+                        Rejoindre le Salon du Coach
+                      </h2>
+                      <p className="text-xs text-slate-600">
+                        Entrez le code à 4 lettres affiché sur l’écran de l’hôte et votre prénom.
+                      </p>
                     </div>
-                  </div>
 
-                  {setupMode === 'PASS_AND_PLAY' ? (
-                    <div className="space-y-3">
-                      <div className="space-y-2">
-                        {setupPlayers.map((draft, idx) => (
-                          <div
-                            key={idx}
-                            className="p-2.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex flex-wrap sm:flex-nowrap items-center gap-2"
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                          Code du Salon (4 caractères)
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          value={joinCodeInput}
+                          onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+                          placeholder="Ex: K7X9"
+                          className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white font-mono-tabular font-extrabold text-xl uppercase tracking-widest text-slate-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                          Votre Prénom
+                        </label>
+                        <input
+                          type="text"
+                          value={joinAthleteName}
+                          onChange={(e) => setJoinAthleteName(e.target.value)}
+                          placeholder="Ex: Maxime"
+                          className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold text-slate-900"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                          Votre Niveau (Scaling)
+                        </label>
+                        <select
+                          value={joinScalingLevel}
+                          onChange={(e) => setJoinScalingLevel(e.target.value as ScalingLevel)}
+                          className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                        >
+                          <option value="SCALED">×0.5 Débutant</option>
+                          <option value="RX">×1.0 Standard (RX)</option>
+                          <option value="ELITE">×1.5 Élite</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                          Équipe
+                        </label>
+                        <select
+                          value={joinTeamId}
+                          onChange={(e) => setJoinTeamId(e.target.value as TeamId)}
+                          className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                        >
+                          <option value="SOLO">Individuel (Solo)</option>
+                          <option value="ALPHA">Équipe Alpha</option>
+                          <option value="BRAVO">Équipe Bravo</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isConnectingP2P}
+                      className="w-full min-h-[58px] rounded-2xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-display font-extrabold text-2xl uppercase tracking-wide flex items-center justify-center gap-2 shadow-sm transition-colors"
+                    >
+                      <ArrowRight className="w-6 h-6" />
+                      Rejoindre la Partie Maintenant
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    {/* 1. Quick Preset Selection */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-xs font-bold uppercase text-slate-700">
+                          1. Programme d’Exercices
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowCustomExercises((v) => !v)}
+                          className="text-xs font-semibold text-slate-600 hover:text-slate-900 flex items-center gap-1"
+                        >
+                          <SlidersHorizontal className="w-3.5 h-3.5" />
+                          <span>{showCustomExercises ? 'Masquer options' : 'Personnaliser'}</span>
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        {WORKOUT_PRESETS.map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() =>
+                              setWorkoutConfig({
+                                ...preset.config,
+                                teamMode: workoutConfig.teamMode,
+                              })
+                            }
+                            className={`p-3.5 rounded-2xl border text-left transition-all ${
+                              workoutConfig.greenExercise === preset.config.greenExercise &&
+                              workoutConfig.yellowExercise === preset.config.yellowExercise
+                                ? 'border-slate-900 bg-slate-900 text-white'
+                                : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-900'
+                            }`}
                           >
-                            <span className="w-8 h-9 rounded-xl bg-slate-200 font-mono-tabular font-bold text-xs text-slate-800 flex items-center justify-center shrink-0">
-                              J{idx + 1}
-                            </span>
-                            <input
-                              type="text"
-                              value={draft.name}
-                              onChange={(e) => {
-                                const copy = [...setupPlayers];
-                                copy[idx] = { ...copy[idx], name: e.target.value };
-                                setSetupPlayers(copy);
-                              }}
-                              className="flex-1 min-w-[120px] h-9 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold text-slate-900"
-                            />
-
-                            {/* Individual Scaling Selector (×0.5 / RX / ×1.5) */}
-                            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shrink-0">
-                              {(['SCALED', 'RX', 'ELITE'] as ScalingLevel[]).map((lvl) => (
-                                <button
-                                  key={lvl}
-                                  type="button"
-                                  onClick={() => {
-                                    const copy = [...setupPlayers];
-                                    copy[idx] = { ...copy[idx], scalingLevel: lvl };
-                                    setSetupPlayers(copy);
-                                  }}
-                                  className={`px-2 py-1 rounded-lg text-[11px] font-mono-tabular font-bold transition-colors ${
-                                    draft.scalingLevel === lvl
-                                      ? 'bg-slate-900 text-white'
-                                      : 'text-slate-600 hover:text-slate-900'
-                                  }`}
-                                >
-                                  {lvl === 'SCALED' ? '×0.5' : lvl === 'RX' ? 'RX' : '×1.5'}
-                                </button>
-                              ))}
+                            <div className="font-display font-bold text-lg uppercase">
+                              {preset.label}
                             </div>
-
-                            {/* Team Badge if Teams Versus */}
-                            {workoutConfig.teamMode === 'TEAMS_VERSUS' && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const copy = [...setupPlayers];
-                                  copy[idx] = {
-                                    ...copy[idx],
-                                    teamId: copy[idx].teamId === 'ALPHA' ? 'BRAVO' : 'ALPHA',
-                                  };
-                                  setSetupPlayers(copy);
-                                }}
-                                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold shrink-0 ${
-                                  draft.teamId === 'ALPHA'
-                                    ? 'bg-red-600 text-white'
-                                    : 'bg-blue-600 text-white'
-                                }`}
-                              >
-                                {draft.teamId === 'ALPHA' ? 'Éq. Alpha' : 'Éq. Bravo'}
-                              </button>
-                            )}
-
-                            {setupPlayers.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSetupPlayers(setupPlayers.filter((_, i) => i !== idx))
-                                }
-                                className="p-1.5 text-slate-400 hover:text-red-600"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
+                            <div className="text-xs opacity-80 truncate mt-0.5">
+                              {preset.subtitle}
+                            </div>
+                          </button>
                         ))}
                       </div>
 
-                      {setupPlayers.length < 4 && (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={newPlayerInput}
-                            onChange={(e) => setNewPlayerInput(e.target.value)}
-                            placeholder="Ajouter un joueur (ex: Thomas)..."
-                            className="flex-1 h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900"
-                          />
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                          <div className="text-[11px] font-bold text-emerald-800">Cases 1–6</div>
+                          <div className="font-display font-bold text-base uppercase text-slate-900 truncate">
+                            {workoutConfig.greenExercise}
+                          </div>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                          <div className="text-[11px] font-bold text-amber-800">Cases 7–13</div>
+                          <div className="font-display font-bold text-base uppercase text-slate-900 truncate">
+                            {workoutConfig.yellowExercise}
+                          </div>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-red-50 border border-red-200">
+                          <div className="text-[11px] font-bold text-red-800">Cases 14–20</div>
+                          <div className="font-display font-bold text-base uppercase text-slate-900 truncate">
+                            {workoutConfig.redExercise}
+                          </div>
+                        </div>
+                      </div>
+
+                      {showCustomExercises && (
+                        <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-xs font-bold text-emerald-800 mb-1">
+                                Vert (Cases 1 à 6)
+                              </label>
+                              <input
+                                type="text"
+                                value={workoutConfig.greenExercise}
+                                onChange={(e) =>
+                                  setWorkoutConfig({
+                                    ...workoutConfig,
+                                    greenExercise: e.target.value,
+                                  })
+                                }
+                                className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-amber-800 mb-1">
+                                Jaune (Cases 7 à 13)
+                              </label>
+                              <input
+                                type="text"
+                                value={workoutConfig.yellowExercise}
+                                onChange={(e) =>
+                                  setWorkoutConfig({
+                                    ...workoutConfig,
+                                    yellowExercise: e.target.value,
+                                  })
+                                }
+                                className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-red-800 mb-1">
+                                Rouge (Cases 14 à 20)
+                              </label>
+                              <input
+                                type="text"
+                                value={workoutConfig.redExercise}
+                                onChange={(e) =>
+                                  setWorkoutConfig({
+                                    ...workoutConfig,
+                                    redExercise: e.target.value,
+                                  })
+                                }
+                                className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 2. Format de Grille : Solo vs Relais Coop vs Duel d'Équipes */}
+                    <div className="space-y-2.5 pt-2 border-t border-slate-200">
+                      <label className="block text-xs font-bold uppercase text-slate-700">
+                        2. Format de Grille (Solo ou Équipes)
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleTeamModeChange('INDIVIDUAL')}
+                          className={`p-3 rounded-xl border text-left transition-all ${
+                            workoutConfig.teamMode === 'INDIVIDUAL'
+                              ? 'border-slate-900 bg-slate-900 text-white'
+                              : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                          }`}
+                        >
+                          <div className="font-display font-bold text-base uppercase">
+                            Chacun sa Grille
+                          </div>
+                          <div className="text-[11px] opacity-80">Compétition individuelle</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleTeamModeChange('COOP_RELAY')}
+                          className={`p-3 rounded-xl border text-left transition-all ${
+                            workoutConfig.teamMode === 'COOP_RELAY'
+                              ? 'border-slate-900 bg-slate-900 text-white'
+                              : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                          }`}
+                        >
+                          <div className="font-display font-bold text-base uppercase">
+                            Relais Coopératif
+                          </div>
+                          <div className="text-[11px] opacity-80">1 grille de 20 cases partagée</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleTeamModeChange('TEAMS_VERSUS')}
+                          className={`p-3 rounded-xl border text-left transition-all ${
+                            workoutConfig.teamMode === 'TEAMS_VERSUS'
+                              ? 'border-slate-900 bg-slate-900 text-white'
+                              : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                          }`}
+                        >
+                          <div className="font-display font-bold text-base uppercase">
+                            Duel d’Équipes (2v2)
+                          </div>
+                          <div className="text-[11px] opacity-80">Équipe Alpha vs Équipe Bravo</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 3. Participants / Lancement selon le mode choisi */}
+                    <div className="space-y-4 pt-2 border-t border-slate-200">
+                      {setupMode === 'PASS_AND_PLAY' ? (
+                        <div className="space-y-3">
+                          <label className="block text-xs font-bold uppercase text-slate-700">
+                            3. Participants sur cet appareil & Niveau (Scaling)
+                          </label>
+                          <div className="space-y-2">
+                            {setupPlayers.map((draft, idx) => (
+                              <div
+                                key={idx}
+                                className="p-2.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex flex-wrap sm:flex-nowrap items-center gap-2"
+                              >
+                                <span className="w-8 h-9 rounded-xl bg-slate-200 font-mono-tabular font-bold text-xs text-slate-800 flex items-center justify-center shrink-0">
+                                  J{idx + 1}
+                                </span>
+                                <input
+                                  type="text"
+                                  value={draft.name}
+                                  onChange={(e) => {
+                                    const copy = [...setupPlayers];
+                                    copy[idx] = { ...copy[idx], name: e.target.value };
+                                    setSetupPlayers(copy);
+                                  }}
+                                  className="flex-1 min-w-[120px] h-9 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold text-slate-900"
+                                />
+
+                                <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shrink-0">
+                                  {(['SCALED', 'RX', 'ELITE'] as ScalingLevel[]).map((lvl) => (
+                                    <button
+                                      key={lvl}
+                                      type="button"
+                                      onClick={() => {
+                                        const copy = [...setupPlayers];
+                                        copy[idx] = { ...copy[idx], scalingLevel: lvl };
+                                        setSetupPlayers(copy);
+                                      }}
+                                      className={`px-2 py-1 rounded-lg text-[11px] font-mono-tabular font-bold transition-colors ${
+                                        draft.scalingLevel === lvl
+                                          ? 'bg-slate-900 text-white'
+                                          : 'text-slate-600 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      {lvl === 'SCALED' ? '×0.5' : lvl === 'RX' ? 'RX' : '×1.5'}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                {workoutConfig.teamMode === 'TEAMS_VERSUS' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const copy = [...setupPlayers];
+                                      copy[idx] = {
+                                        ...copy[idx],
+                                        teamId: copy[idx].teamId === 'ALPHA' ? 'BRAVO' : 'ALPHA',
+                                      };
+                                      setSetupPlayers(copy);
+                                    }}
+                                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold shrink-0 ${
+                                      draft.teamId === 'ALPHA'
+                                        ? 'bg-red-600 text-white'
+                                        : 'bg-blue-600 text-white'
+                                    }`}
+                                  >
+                                    {draft.teamId === 'ALPHA' ? 'Éq. Alpha' : 'Éq. Bravo'}
+                                  </button>
+                                )}
+
+                                {setupPlayers.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setSetupPlayers(setupPlayers.filter((_, i) => i !== idx))
+                                    }
+                                    className="p-1.5 text-slate-400 hover:text-red-600"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          {setupPlayers.length < 4 && (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={newPlayerInput}
+                                onChange={(e) => setNewPlayerInput(e.target.value)}
+                                placeholder="Ajouter un joueur (ex: Thomas)..."
+                                className="flex-1 h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextName =
+                                    newPlayerInput.trim() || `Athlète ${setupPlayers.length + 1}`;
+                                  const nextTeam: TeamId =
+                                    workoutConfig.teamMode === 'INDIVIDUAL'
+                                      ? 'SOLO'
+                                      : workoutConfig.teamMode === 'COOP_RELAY'
+                                      ? 'ALPHA'
+                                      : setupPlayers.length % 2 === 0
+                                      ? 'ALPHA'
+                                      : 'BRAVO';
+                                  setSetupPlayers([
+                                    ...setupPlayers,
+                                    { name: nextName, scalingLevel: 'RX', teamId: nextTeam },
+                                  ]);
+                                  setNewPlayerInput('');
+                                }}
+                                className="h-10 px-3.5 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-800 flex items-center gap-1"
+                              >
+                                <Plus className="w-4 h-4" />
+                                Ajouter
+                              </button>
+                            </div>
+                          )}
+
                           <button
                             type="button"
-                            onClick={() => {
-                              const nextName =
-                                newPlayerInput.trim() || `Athlète ${setupPlayers.length + 1}`;
-                              const nextTeam: TeamId =
-                                workoutConfig.teamMode === 'INDIVIDUAL'
-                                  ? 'SOLO'
-                                  : workoutConfig.teamMode === 'COOP_RELAY'
-                                  ? 'ALPHA'
-                                  : setupPlayers.length % 2 === 0
-                                  ? 'ALPHA'
-                                  : 'BRAVO';
-                              setSetupPlayers([
-                                ...setupPlayers,
-                                { name: nextName, scalingLevel: 'RX', teamId: nextTeam },
-                              ]);
-                              setNewPlayerInput('');
-                            }}
-                            className="h-10 px-3.5 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-800 flex items-center gap-1"
+                            onClick={handleStartPassAndPlay}
+                            className="mt-2 w-full min-h-[60px] rounded-2xl bg-red-600 hover:bg-red-700 text-white font-display font-extrabold text-2xl uppercase tracking-wide shadow-sm flex items-center justify-center gap-2 transition-colors"
                           >
-                            <Plus className="w-4 h-4" />
-                            Ajouter
+                            <Play className="w-6 h-6" />
+                            Démarrer la Séance
+                          </button>
+                        </div>
+                      ) : (
+                        /* SIMPLIFIED HOST LAUNCH CARD */
+                        <div className="p-5 rounded-2xl border-2 border-red-200 bg-red-50/40 space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div>
+                              <h3 className="font-display font-extrabold text-2xl uppercase text-slate-900">
+                                3. Ouvrir le Salon en tant qu’Hôte
+                              </h3>
+                              <p className="text-xs text-slate-600">
+                                Un code à 4 lettres et un lien d’invitation seront générés immédiatement.
+                              </p>
+                            </div>
+                          </div>
+
+                          <label className="flex items-center gap-2.5 p-3 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-800 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={hostPlaysToo}
+                              onChange={(e) => setHostPlaysToo(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-red-600 focus:ring-red-600"
+                            />
+                            <span>Je joue aussi avec ma propre grille sur cet appareil</span>
+                          </label>
+
+                          {hostPlaysToo && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                                  Votre Prénom
+                                </label>
+                                <input
+                                  type="text"
+                                  value={hostAthleteName}
+                                  onChange={(e) => setHostAthleteName(e.target.value)}
+                                  placeholder="Ex: Lucas"
+                                  className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-semibold text-slate-900"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                                  Votre Niveau (Scaling)
+                                </label>
+                                <select
+                                  value={hostScalingLevel}
+                                  onChange={(e) =>
+                                    setHostScalingLevel(e.target.value as ScalingLevel)
+                                  }
+                                  className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                                >
+                                  <option value="SCALED">×0.5 Débutant</option>
+                                  <option value="RX">×1.0 Standard (RX)</option>
+                                  <option value="ELITE">×1.5 Élite</option>
+                                </select>
+                              </div>
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            disabled={isConnectingP2P}
+                            onClick={() =>
+                              handleCreateCoachRoom(
+                                hostPlaysToo ? hostAthleteName.trim() || 'Hôte' : undefined
+                              )
+                            }
+                            className="w-full min-h-[60px] rounded-2xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-display font-extrabold text-2xl uppercase tracking-wide shadow-sm flex items-center justify-center gap-2 transition-colors"
+                          >
+                            <Play className="w-6 h-6" />
+                            Ouvrir le Salon & Inviter mes Clients
                           </button>
                         </div>
                       )}
-
-                      <button
-                        type="button"
-                        onClick={handleStartPassAndPlay}
-                        className="mt-2 w-full min-h-[60px] rounded-2xl bg-red-600 hover:bg-red-700 text-white font-display font-extrabold text-2xl uppercase tracking-wide shadow-sm flex items-center justify-center gap-2 transition-colors"
-                      >
-                        <Play className="w-6 h-6" />
-                        Démarrer la Séance
-                      </button>
                     </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleCreateCoachRoom(setupPlayers[0]?.name || 'Athlète 1')
-                          }
-                          className="w-full min-h-[56px] px-4 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-display font-extrabold text-xl uppercase tracking-wide shadow-sm flex items-center justify-center gap-2 transition-colors"
-                        >
-                          <Smartphone className="w-5 h-5" />
-                          Créer & Jouer (Mobile)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleCreateCoachRoom()}
-                          className="w-full min-h-[56px] px-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-display font-extrabold text-xl uppercase tracking-wide shadow-sm flex items-center justify-center gap-2 transition-colors"
-                        >
-                          <Tv className="w-5 h-5" />
-                          Ouvrir Écran Coach TV
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setActiveNav('MULTI_ROOM')}
-                        className="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold"
-                      >
-                        J’ai déjà un Code à 4 lettres (Rejoindre la partie d’un ami)
-                      </button>
-                    </div>
-                  )}
-                </div>
+                  </>
+                )}
               </div>
             ) : room.status === 'GAME_OVER' ? (
               /* VICTORY & SUMMARY VIEW */
@@ -1996,6 +2238,63 @@ export default function App() {
               /* ULTRA-FOCUSED ACTIVE WORKOUT VIEW (1 Step at a Time) */
               currentActivePlayer && (
                 <div className="max-w-xl mx-auto space-y-4">
+                  {/* MULTI-PHONE INVITE & ROOM BAR (Always visible in Multi-Screen so Host can invite easily) */}
+                  {room.mode === 'MULTI_SCREEN' && (
+                    <div className="bg-slate-900 text-white rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+                      <div className="flex items-center gap-3">
+                        <div className="px-3 py-1.5 rounded-xl bg-white/15 font-mono-tabular font-extrabold text-lg tracking-widest">
+                          CODE : {room.roomCode}
+                        </div>
+                        <div className="text-xs">
+                          <div className="font-bold text-white">
+                            {room.players.length} joueur{room.players.length > 1 ? 's' : ''} connecté
+                            {room.players.length > 1 ? 's' : ''}
+                          </div>
+                          <div className="text-slate-300 truncate max-w-[180px] sm:max-w-[240px]">
+                            {room.players.map((p) => p.name).join(', ')}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleShareInviteNative(room.roomCode)}
+                          className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+                        >
+                          <Share2 className="w-3.5 h-3.5" />
+                          <span>Inviter</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyInviteLink(room.roomCode)}
+                          className="px-2.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1 transition-colors"
+                        >
+                          {copiedInviteLink ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Copié !</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>Lien</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMultiScreenRole('COACH')}
+                          className="px-2.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1 transition-colors"
+                          title="Voir toutes les grilles du salon (Écran Coach)"
+                        >
+                          <Tv className="w-3.5 h-3.5" />
+                          <span>TV</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* 1. Compact Player Header + Scaling Badge + Voice Coach Toggle */}
                   <div className="bg-white border border-slate-200 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-2.5 shadow-2xs">
                     {room.mode === 'PASS_AND_PLAY' ? (
@@ -2032,9 +2331,6 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="flex flex-wrap items-center gap-2 min-w-0">
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-900 text-white font-mono-tabular font-extrabold text-xs tracking-wider">
-                          CODE : {room.roomCode}
-                        </span>
                         <span className="font-display font-bold text-xl uppercase text-slate-900 truncate">
                           {currentActivePlayer.name} ({currentActivePlayer.completedCells.length}/20)
                         </span>
@@ -2046,7 +2342,7 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Right Utility Controls: Scaling Button + Voice Coach + Sound + TV */}
+                    {/* Right Utility Controls: Scaling Button + Voice Coach + Sound */}
                     <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
@@ -2061,7 +2357,9 @@ export default function App() {
                         type="button"
                         onClick={toggleVoiceCoach}
                         title={
-                          voiceCoachEnabled ? 'Coach Vocal actif (Cliquer pour couper)' : 'Activer le Coach Vocal'
+                          voiceCoachEnabled
+                            ? 'Coach Vocal actif (Cliquer pour couper)'
+                            : 'Activer le Coach Vocal'
                         }
                         className={`p-2 rounded-xl border transition-colors ${
                           voiceCoachEnabled
@@ -2088,17 +2386,6 @@ export default function App() {
                           <Volume2 className="w-4 h-4 text-slate-800" />
                         )}
                       </button>
-
-                      {room.mode === 'MULTI_SCREEN' && (
-                        <button
-                          type="button"
-                          onClick={() => setMultiScreenRole('COACH')}
-                          className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1"
-                        >
-                          <Tv className="w-3.5 h-3.5" />
-                          <span>TV</span>
-                        </button>
-                      )}
                     </div>
                   </div>
 

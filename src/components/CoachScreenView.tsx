@@ -8,10 +8,11 @@ import {
   Plus,
   Snowflake,
   Activity,
-  Trophy,
   Smartphone,
+  Share2,
 } from 'lucide-react';
 import { RoomState, getCellTier } from '../types/game';
+import { buildShareableRoomUrl } from '../utils/multiplayerSync';
 
 interface CoachScreenViewProps {
   room: RoomState;
@@ -29,17 +30,30 @@ export const CoachScreenView: React.FC<CoachScreenViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [quickAthleteName, setQuickAthleteName] = useState('');
 
-  const joinUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}?room=${room.roomCode}`
-      : `https://d20-fitness.app?room=${room.roomCode}`;
+  const joinUrl = buildShareableRoomUrl(room.roomCode);
 
   const handleCopyLink = () => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(joinUrl).catch(() => {});
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => setCopied(false), 2500);
     }
+  };
+
+  const handleShareNative = async () => {
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: `D20 Fitness Battle — Salon ${room.roomCode}`,
+          text: `Rejoins la bataille D20 Fitness avec le code ${room.roomCode} :`,
+          url: joinUrl,
+        });
+        return;
+      } catch {
+        // Fallback to copy
+      }
+    }
+    handleCopyLink();
   };
 
   const handleQuickAdd = (e: React.FormEvent) => {
@@ -65,7 +79,7 @@ export const CoachScreenView: React.FC<CoachScreenViewProps> = ({
           <div className="lg:col-span-5 flex flex-col sm:flex-row items-start sm:items-center gap-5 border-b lg:border-b-0 lg:border-r border-slate-200 pb-5 lg:pb-0 lg:pr-6">
             <div className="bg-slate-900 text-white rounded-2xl px-5 py-4 text-center shrink-0">
               <div className="text-[11px] font-semibold uppercase tracking-widest text-slate-300">
-                Code Salle
+                Code Salon
               </div>
               <div className="font-mono-tabular font-extrabold text-4xl tracking-widest mt-0.5">
                 {room.roomCode}
@@ -75,18 +89,26 @@ export const CoachScreenView: React.FC<CoachScreenViewProps> = ({
             <div className="space-y-2 min-w-0">
               <div className="flex items-center gap-2 text-slate-900 font-display font-bold text-xl uppercase">
                 <Tv className="w-5 h-5 text-red-600 shrink-0" />
-                <span>Écran Coach / TV Temps Réel</span>
+                <span>Salon Hôte · Vue Globale</span>
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Les athlètes rejoignent depuis leur smartphone avec le code{' '}
+                Les clients rejoignent avec le code{' '}
                 <span className="font-mono-tabular font-bold text-slate-900">{room.roomCode}</span>{' '}
-                ou via le lien direct.
+                ou en cliquant sur le lien d’invitation ci-dessous.
               </p>
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <button
                   type="button"
+                  onClick={handleShareNative}
+                  className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>Inviter des Clients</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleCopyLink}
-                  className="px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                 >
                   {copied ? (
                     <>
@@ -96,7 +118,7 @@ export const CoachScreenView: React.FC<CoachScreenViewProps> = ({
                   ) : (
                     <>
                       <Copy className="w-3.5 h-3.5" />
-                      <span>Copier le lien Athlète</span>
+                      <span>Copier le lien</span>
                     </>
                   )}
                 </button>
